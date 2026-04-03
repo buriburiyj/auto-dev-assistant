@@ -13,8 +13,10 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Generate and commit code draft
+      - name: AI Full Pipeline
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -23,26 +25,46 @@ jobs:
           ISSUE_BODY=$(jq -r '.issue.body // empty' "$GITHUB_EVENT_PATH")
           ISSUE_NUM=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
 
-          PROMPT="React 컴포넌트 코드를 작성해줘. 마크다운 코드블록 없이 순수 JSX만. export default 포함. 이슈: ${ISSUE_TITLE}. 내용: ${ISSUE_BODY}"
-          ESCAPED_PROMPT=$(echo "$PROMPT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          python3 << 'PYSCRIPT'
+          import subprocess, json, os, re
 
-          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" -H "Content-Type: application/json" -d "{\"contents\":[{\"parts\":[{\"text\":$ESCAPED_PROMPT}]}]}")
+          api_key = os.environ["GEMINI_API_KEY"]
+          title = subprocess.run(["jq","-r",".issue.title",os.environ["GITHUB_EVENT_PATH"]], capture_output=True, text=True).stdout.strip()
+          body = subprocess.run(["jq","-r",".issue.body // empty",os.environ["GITHUB_EVENT_PATH"]], capture_output=True, text=True).stdout.strip()
 
-          CODE=$(echo "$RESPONSE" | python3 -c "
-          import sys, json, re
-          d = json.load(sys.stdin)
-          text = d.get('candidates',[{}])[0].get('content',{}).get('parts',[{}])[0].get('text','// no code')
-          text = re.sub(r'\'\'\'\'\'[a-zA-Z]*\\n?', '', text).strip()
-          print(text)")
+          def call_gemini(prompt):
+              payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]})
+              result = subprocess.run(["curl", "-s", f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}", "-H", "Content-Type: application/json", "-d", payload], capture_output=True, text=True)
+              try:
+                  d = json.loads(result.stdout)
+                  return d.get("candidates",[{}])[0].get("content",{}).get("parts",[{}])[0].get("text","")
+              except:
+                  return ""
 
-          FILENAME=$(echo "$ISSUE_TITLE" | python3 -c "
-          import sys, re
-          t = sys.stdin.read().strip()
-          n = re.sub(r'[^a-zA-Z0-9 ]', '', t)
-          print(''.join(w.capitalize() for w in n.split()) or 'Component')")
+          code = call_gemini(f"React 컴포넌트 코드만 작성해줘. 마크다운 코드블록 없이 순수 JSX만. export default 포함.\n이슈: {title}\n내용: {body}")
+          code = re.sub(r'```[a-zA-Z]*\n?', '', code).strip()
 
-          mkdir -p src/components
-          echo "$CODE" > "src/components/${FILENAME}.jsx"
+          name = re.sub(r'[^a-zA-Z0-9 ]', '', title)
+          filename = ''.join(w.capitalize() for w in name.split()) or 'Component'
+
+          os.makedirs("src/components", exist_ok=True)
+          with open(f"src/components/{filename}.jsx", "w") as f:
+              f.write(code)
+
+          review = call_gemini(f"다음 React 코드를 리뷰해줘. 한국어. 점수(X/10), 좋은점, 개선점, 접근성, 성능:\n{code}")
+          audit = call_gemini(f"다음 React 코드의 성능과 접근성 감사 리포트. 표 형식, 이모지, 한국어:\n{code}")
+
+          with open("/tmp/filename.txt", "w") as f:
+              f.write(filename)
+          with open("/tmp/review.txt", "w") as f:
+              f.write(review)
+          with open("/tmp/audit.txt", "w") as f:
+              f.write(audit)
+          PYSCRIPT
+
+          FILENAME=$(cat /tmp/filename.txt)
+          REVIEW=$(cat /tmp/review.txt)
+          AUDIT=$(cat /tmp/audit.txt)
 
           git config user.name "gemini-bot"
           git config user.email "gemini-bot@auto.dev"
@@ -51,5 +73,14 @@ jobs:
           git add .
           git commit -m "feat: AI draft for #${ISSUE_NUM} - ${ISSUE_TITLE}"
           git push origin "$BRANCH"
-          gh pr create --title "feat: ${ISSUE_TITLE}" --body "Closes #${ISSUE_NUM}" --base main --head "$BRANCH"
-          gh issue comment "$ISSUE_NUM" --body "AI가 코드 초안을 작성했습니다! PR을 확인해주세요."
+
+          gh pr create --title "feat: ${ISSUE_TITLE}" --body "Closes #${ISSUE_NUM}
+
+          ## 🤖 AI 코드 리뷰
+          ${REVIEW}
+
+          ---
+          ## 🔍 AI 성능/접근성 감사
+          ${AUDIT}" --base main --head "$BRANCH"
+
+          gh issue comment "$ISSUE_NUM" --body "AI가 코드를 생성하고 리뷰까지 완료했습니다! PR: ${PR_URL}"
