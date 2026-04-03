@@ -14,35 +14,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Gemini CLI
-        run: npm install -g @google/gemini-cli
-
-      - name: Generate code draft
+      - name: Generate and commit code draft
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ISSUE_TITLE="${{ github.event.issue.title }}"
           ISSUE_BODY="${{ github.event.issue.body }}"
-          gemini -p "다음 이슈를 보고 React 컴포넌트 초안 코드를 작성해줘. 이슈 제목: $ISSUE_TITLE, 내용: $ISSUE_BODY. src/components/ 폴더에 적절한 파일명으로 저장해줘."
+          ISSUE_NUM="${{ github.event.issue.number }}"
 
-      - name: Commit and create PR
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
+          RESPONSE=$(curl -s \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"contents\":[{\"parts\":[{\"text\":\"다음 이슈를 보고 React 컴포넌트 코드만 작성해줘. 설명 없이 코드만. 이슈 제목: $ISSUE_TITLE, 내용: $ISSUE_BODY\"}]}]}")
+
+          CODE=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['candidates'][0]['content']['parts'][0]['text'])")
+
+          mkdir -p src/components
+          FILENAME=$(echo "$ISSUE_TITLE" | sed 's/ /-/g' | sed 's/[^a-zA-Z0-9가-힣-]//g')
+          echo "$CODE" > "src/components/${FILENAME}.jsx"
+
           git config user.name "gemini-bot"
           git config user.email "gemini-bot@auto.dev"
-          BRANCH="ai-draft/${{ github.event.issue.number }}"
+          BRANCH="ai-draft/${ISSUE_NUM}"
           git checkout -b "$BRANCH"
           git add .
-          git commit -m "AI draft for issue #${{ github.event.issue.number }}" || echo "nothing to commit"
+          git commit -m "AI draft for issue #${ISSUE_NUM}"
           git push origin "$BRANCH"
           gh pr create \
-            --title "AI draft for issue #${{ github.event.issue.number }}" \
-            --body "Closes #${{ github.event.issue.number }}" \
+            --title "AI draft: $ISSUE_TITLE" \
+            --body "Closes #${ISSUE_NUM}" \
             --base main \
             --head "$BRANCH"
