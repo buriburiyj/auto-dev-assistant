@@ -1,0 +1,38 @@
+name: AI Auto Documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/components/**'
+
+jobs:
+  update-docs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate docs
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          FILES=$(find src/components -name "*.jsx" -o -name "*.tsx" 2>/dev/null)
+          if [ -z "$FILES" ]; then
+            echo "No components found"
+            exit 0
+          fi
+          CODE=""
+          for f in $FILES; do
+            CODE="$CODE\n--- $f ---\n$(cat $f)"
+          done
+          ESCAPED=$(echo "$CODE" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" -H "Content-Type: application/json" -d "{\"contents\":[{\"parts\":[{\"text\":\"다음 React 컴포넌트들의 문서를 마크다운으로 작성해줘. 각 컴포넌트별로 설명, Props 표, 사용 예시 포함. 한국어로:\n$ESCAPED\"}]}]}")
+          DOCS=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('candidates',[{}])[0].get('content',{}).get('parts',[{}])[0].get('text','문서 생성 실패'))")
+          echo "$DOCS" > COMPONENTS.md
+          git config user.name "gemini-bot"
+          git config user.email "gemini-bot@auto.dev"
+          git add COMPONENTS.md
+          git commit -m "docs: auto-update component documentation" || echo "No changes"
+          git push origin main
