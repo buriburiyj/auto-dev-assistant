@@ -31,10 +31,18 @@ jobs:
           gemini -p "다음 이슈를 보고 React 컴포넌트 초안 코드를 작성해줘. 이슈 제목: $ISSUE_TITLE, 내용: $ISSUE_BODY. src/components/ 폴더에 적절한 파일명으로 저장해줘."
 
       - name: Commit and create PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "gemini-bot"
           git config user.email "gemini-bot@auto.dev"
-          git checkout -b "ai-draft/${{ github.event.issue.number }}"
+          BRANCH="ai-draft/${{ github.event.issue.number }}"
+          git checkout -b "$BRANCH"
           git add .
-          git commit -m "AI draft for issue #${{ github.event.issue.number }}"
-          git push origin "ai-draft/${{ github.event.issue.number }}"
+          git commit -m "AI draft for issue #${{ github.event.issue.number }}" || echo "nothing to commit"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "AI draft for issue #${{ github.event.issue.number }}" \
+            --body "Closes #${{ github.event.issue.number }}" \
+            --base main \
+            --head "$BRANCH"
