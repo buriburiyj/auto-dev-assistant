@@ -20,40 +20,58 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
         run: |
           ISSUE_TITLE=$(jq -r '.issue.title' "$GITHUB_EVENT_PATH")
           ISSUE_BODY=$(jq -r '.issue.body // empty' "$GITHUB_EVENT_PATH")
           ISSUE_NUM=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
-
-          python3 << 'PYSCRIPT'
+          export ISSUE_TITLE ISSUE_BODY ISSUE_NUM
+          python3 /dev/stdin << 'PYSCRIPT'
           import subprocess, json, os, re
 
           api_key = os.environ["GEMINI_API_KEY"]
-          title = subprocess.run(["jq","-r",".issue.title",os.environ["GITHUB_EVENT_PATH"]], capture_output=True, text=True).stdout.strip()
-          body = subprocess.run(["jq","-r",".issue.body // empty",os.environ["GITHUB_EVENT_PATH"]], capture_output=True, text=True).stdout.strip()
+          title = os.environ.get("ISSUE_TITLE","")
+          body = os.environ.get("ISSUE_BODY","")
 
-          def call_gemini(prompt):
-              payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]})
-              result = subprocess.run(["curl", "-s", f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}", "-H", "Content-Type: application/json", "-d", payload], capture_output=True, text=True)
-              try:
-                  d = json.loads(result.stdout)
-                  return d.get("candidates",[{}])[0].get("content",{}).get("parts",[{}])[0].get("text","")
-              except:
-                  return ""
+          prompt = "다음 GitHub 이슈를 보고 3가지를 한번에 해줘.\n"
+          prompt += "이슈 제목: " + title + "\n"
+          prompt += "이슈 내용: " + body + "\n\n"
+          prompt += "반드시 아래 형식 그대로 출력해줘:\n\n"
+          prompt += "===CODE_START===\n"
+          prompt += "(React 컴포넌트 순수 JSX 코드만. 마크다운 코드블록 없이. export default 포함)\n"
+          prompt += "===CODE_END===\n\n"
+          prompt += "===REVIEW_START===\n"
+          prompt += "(코드 리뷰. 한국어. 점수 X/10, 좋은점, 개선점, 접근성, 성능)\n"
+          prompt += "===REVIEW_END===\n\n"
+          prompt += "===AUDIT_START===\n"
+          prompt += "(성능/접근성 감사 리포트. 이모지, 표 형식, 한국어)\n"
+          prompt += "===AUDIT_END===\n"
 
-          code = call_gemini(f"React 컴포넌트 코드만 작성해줘. 마크다운 코드블록 없이 순수 JSX만. export default 포함.\n이슈: {title}\n내용: {body}")
+          payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]})
+          url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + api_key
+          result = subprocess.run(["curl", "-s", url, "-H", "Content-Type: application/json", "-d", payload], capture_output=True, text=True)
+
+          try:
+              d = json.loads(result.stdout)
+              text = d["candidates"][0]["content"]["parts"][0]["text"]
+          except:
+              text = ""
+
+          code_m = re.search(r'===CODE_START===\s*(.*?)\s*===CODE_END===', text, re.DOTALL)
+          review_m = re.search(r'===REVIEW_START===\s*(.*?)\s*===REVIEW_END===', text, re.DOTALL)
+          audit_m = re.search(r'===AUDIT_START===\s*(.*?)\s*===AUDIT_END===', text, re.DOTALL)
+
+          code = code_m.group(1).strip() if code_m else "// no code"
           code = re.sub(r'```[a-zA-Z]*\n?', '', code).strip()
+          review = review_m.group(1).strip() if review_m else "리뷰 생성 실패"
+          audit = audit_m.group(1).strip() if audit_m else "감사 생성 실패"
 
-          name = re.sub(r'[^a-zA-Z0-9 ]', '', title)
-          filename = ''.join(w.capitalize() for w in name.split()) or 'Component'
+          name_clean = re.sub(r'[^a-zA-Z0-9 ]', '', title)
+          filename = ''.join(w.capitalize() for w in name_clean.split()) or 'Component'
 
           os.makedirs("src/components", exist_ok=True)
-          with open(f"src/components/{filename}.jsx", "w") as f:
+          with open("src/components/" + filename + ".jsx", "w") as f:
               f.write(code)
-
-          review = call_gemini(f"다음 React 코드를 리뷰해줘. 한국어. 점수(X/10), 좋은점, 개선점, 접근성, 성능:\n{code}")
-          audit = call_gemini(f"다음 React 코드의 성능과 접근성 감사 리포트. 표 형식, 이모지, 한국어:\n{code}")
-
           with open("/tmp/filename.txt", "w") as f:
               f.write(filename)
           with open("/tmp/review.txt", "w") as f:
@@ -76,11 +94,11 @@ jobs:
 
           gh pr create --title "feat: ${ISSUE_TITLE}" --body "Closes #${ISSUE_NUM}
 
-          ## 🤖 AI 코드 리뷰
-          ${REVIEW}
+## 🤖 AI 코드 리뷰
+${REVIEW}
 
-          ---
-          ## 🔍 AI 성능/접근성 감사
-          ${AUDIT}" --base main --head "$BRANCH"
+---
+## 🔍 AI 성능/접근성 감사
+${AUDIT}" --base main --head "$BRANCH"
 
-          gh issue comment "$ISSUE_NUM" --body "AI가 코드를 생성하고 리뷰까지 완료했습니다! PR: ${PR_URL}"
+          gh issue comment "$ISSUE_NUM" --body "AI가 코드 생성 + 리뷰 + 감사 완료! PR을 확인해주세요."
