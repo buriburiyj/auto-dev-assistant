@@ -1,0 +1,15 @@
+.loading-spinner {
+  border-radius: 50%;
+  border-style: solid;
+  border-color: rgba(0, 0, 0, 0.1);
+  border-top-color: var(--spinner-color, #000);
+  animation: spin 1s linear infinite;
+  display: inline-block;
+  box-sizing: border-box;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
