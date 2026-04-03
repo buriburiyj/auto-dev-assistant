@@ -1,0 +1,34 @@
+name: AI Performance and A11y Audit
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: AI Audit
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FILES=$(find src/components -name "*.jsx" -o -name "*.tsx" 2>/dev/null | head -10)
+          if [ -z "$FILES" ]; then echo "No components" && exit 0; fi
+          CODE=""
+          for f in $FILES; do CODE="$CODE\n--- $f ---\n$(cat $f)"; done
+          ESCAPED=$(echo -e "$CODE" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          PAYLOAD="{\"contents\":[{\"parts\":[{\"text\":\"다음 React 코드의 성능과 접근성 감사를 해줘. 이모지 써서 보기좋게 리포트 작성. 한국어로:\n\"$ESCAPED\"}]}]}"
+          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" -H "Content-Type: application/json" -d "$PAYLOAD")
+          AUDIT=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('candidates',[{}])[0].get('content',{}).get('parts',[{}])[0].get('text','감사 실패'))")
+          PR_NUM="${{ github.event.pull_request.number }}"
+          gh pr comment "$PR_NUM" --body "## 🔍 AI 성능/접근성 감사 리포트
+
+$AUDIT"
