@@ -21,43 +21,33 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           FILES=$(find src/components -name "*.jsx" -o -name "*.tsx" 2>/dev/null | head -10)
-          if [ -z "$FILES" ]; then
-            echo "No component files found, skipping audit"
-            exit 0
-          fi
+          if [ -z "$FILES" ]; then echo "No components" && exit 0; fi
 
-          CODE=""
-          for f in $FILES; do
-            CONTENT=$(cat "$f")
-            CODE="${CODE}
---- ${f} ---
-${CONTENT}
-"
-          done
+          python3 << 'AUDIT_SCRIPT'
+          import subprocess, json, os
 
-          PROMPT="다음 React 컴포넌트들을 분석해서 성능/접근성 감사 리포트를 작성해줘.
-          형식 (한국어, 이모지 사용):
-          ## 감사 결과 요약
-          | 항목 | 상태 | 설명 |
-          ### 성능 이슈
-          ### 접근성 이슈
-          ### 개선 권장사항 (우선순위별)
+          files = subprocess.run(["find", "src/components", "-name", "*.jsx", "-o", "-name", "*.tsx"], capture_output=True, text=True).stdout.strip().split("\n")
+          code = ""
+          for f in files:
+              if f and os.path.exists(f):
+                  with open(f) as fh:
+                      code += f"\n--- {f} ---\n{fh.read()}"
 
-          코드:
-          $CODE"
+          prompt = f"다음 React 코드의 성능과 접근성 감사 리포트를 작성해줘. 표 형식, 이모지, 한국어로:\n{code}"
+          payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]})
 
-          ESCAPED_PROMPT=$(echo "$PROMPT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          api_key = os.environ["GEMINI_API_KEY"]
+          result = subprocess.run(["curl", "-s", f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}", "-H", "Content-Type: application/json", "-d", payload], capture_output=True, text=True)
 
-          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"contents\":[{\"parts\":[{\"text\":$ESCAPED_PROMPT}]}]}")
+          d = json.loads(result.stdout)
+          audit = d.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "감사 실패")
 
-          AUDIT=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('candidates',[{}])[0].get('content',{}).get('parts',[{}])[0].get('text','감사 실패'))")
+          with open("/tmp/audit.txt", "w") as f:
+              f.write(audit)
+          AUDIT_SCRIPT
 
+          AUDIT=$(cat /tmp/audit.txt)
           PR_NUM="${{ github.event.pull_request.number }}"
           gh pr comment "$PR_NUM" --body "## 🔍 AI 성능/접근성 감사 리포트
 
-$AUDIT
-
----
-> *Powered by Gemini AI*"
+          $AUDIT"

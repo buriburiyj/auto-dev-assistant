@@ -2,7 +2,7 @@ name: AI Code Review
 
 on:
   pull_request:
-    types: [opened]
+    types: [opened, synchronize]
 
 jobs:
   review:
@@ -12,16 +12,24 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: AI Code Review
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DIFF=$(git diff origin/main...HEAD)
-          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"contents\":[{\"parts\":[{\"text\":\"다음 코드 변경사항을 리뷰해줘. 접근성, 성능, 개선점 위주로. 한국어로:\n$DIFF\"}]}]}")
-          REVIEW=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('candidates',[{}])[0].get('content',{}).get('parts',[{}])[0].get('text','리뷰 생성 실패'))")
+          git fetch origin main
+          DIFF=$(git diff origin/main...HEAD -- '*.jsx' '*.tsx' '*.js' '*.ts' '*.css' 2>/dev/null | head -c 5000)
+          if [ -z "$DIFF" ]; then echo "No diff" && exit 0; fi
+
+          ESCAPED=$(echo "$DIFF" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          PROMPT="다음 코드 변경사항을 리뷰해줘. 한국어로. 점수(X/10), 좋은점, 개선점, 접근성, 성능 체크 포함."
+          FULL=$(python3 -c "import json; print(json.dumps(f\"$PROMPT\\n{json.loads($ESCAPED)}\"))")
+
+          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" -H "Content-Type: application/json" -d "{\"contents\":[{\"parts\":[{\"text\":$FULL}]}]}")
+
+          REVIEW=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('candidates',[{}])[0].get('content',{}).get('parts',[{}])[0].get('text','리뷰 실패'))")
           PR_NUM="${{ github.event.pull_request.number }}"
           gh pr comment "$PR_NUM" --body "$REVIEW"

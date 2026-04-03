@@ -18,50 +18,31 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          FILES=$(find src/components -name "*.jsx" -o -name "*.tsx" 2>/dev/null)
-          if [ -z "$FILES" ]; then
-            echo "No components found"
-            exit 0
-          fi
+          python3 << 'DOCS_SCRIPT'
+          import subprocess, json, os, glob
 
-          CODE=""
-          for f in $FILES; do
-            CONTENT=$(cat "$f")
-            CODE="${CODE}
---- ${f} ---
-${CONTENT}
-"
-          done
+          files = glob.glob("src/components/**/*.jsx", recursive=True) + glob.glob("src/components/**/*.tsx", recursive=True)
+          if not files:
+              print("No components")
+              exit(0)
 
-          PROMPT="다음 React 컴포넌트들의 문서를 마크다운으로 작성해줘. 한국어로.
-          형식:
-          # 컴포넌트 문서
-          ## [컴포넌트명]
-          ### 설명
-          ### Props
-          | Prop | 타입 | 기본값 | 설명 |
-          ### 사용 예시 (코드)
-          ---
-          마지막에 '마지막 업데이트: (오늘 날짜)' 추가
+          code = ""
+          for f in files:
+              with open(f) as fh:
+                  code += f"\n--- {f} ---\n{fh.read()}"
 
-          코드:
-          $CODE"
+          prompt = f"다음 React 컴포넌트들의 문서를 마크다운으로 작성해줘. 각 컴포넌트별 설명, Props 표, 사용 예시 포함. 한국어로:\n{code}"
+          payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]})
 
-          ESCAPED_PROMPT=$(echo "$PROMPT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          api_key = os.environ["GEMINI_API_KEY"]
+          result = subprocess.run(["curl", "-s", f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}", "-H", "Content-Type: application/json", "-d", payload], capture_output=True, text=True)
 
-          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"contents\":[{\"parts\":[{\"text\":$ESCAPED_PROMPT}]}]}")
+          d = json.loads(result.stdout)
+          docs = d.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "문서 생성 실패")
 
-          DOCS=$(echo "$RESPONSE" | python3 -c "
-          import sys, json, re
-          d = json.load(sys.stdin)
-          text = d.get('candidates',[{}])[0].get('content',{}).get('parts',[{}])[0].get('text','문서 생성 실패')
-          text = re.sub(r'\`\`\`[a-zA-Z]*\n?', '', text)
-          print(text)
-          ")
-
-          echo "$DOCS" > COMPONENTS.md
+          with open("COMPONENTS.md", "w") as f:
+              f.write(docs)
+          DOCS_SCRIPT
 
           git config user.name "gemini-bot"
           git config user.email "gemini-bot@auto.dev"
