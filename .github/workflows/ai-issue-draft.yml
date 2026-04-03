@@ -20,10 +20,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ISSUE_TITLE="${{ github.event.issue.title }}"
-          ISSUE_BODY="${{ github.event.issue.body }}"
           ISSUE_NUM="${{ github.event.issue.number }}"
           RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" -H "Content-Type: application/json" -d "{\"contents\":[{\"parts\":[{\"text\":\"React 컴포넌트 코드만 작성해줘. 설명없이 코드만. 이슈: $ISSUE_TITLE\"}]}]}")
-          CODE=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['candidates'][0]['content']['parts'][0]['text'])")
+          echo "API Response: $RESPONSE"
+          CODE=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('candidates',[{}])[0].get('content',{}).get('parts',[{}])[0].get('text','// no code generated'))")
           mkdir -p src/components
           FILENAME=$(echo "$ISSUE_TITLE" | sed 's/ /-/g')
           echo "$CODE" > "src/components/${FILENAME}.jsx"
