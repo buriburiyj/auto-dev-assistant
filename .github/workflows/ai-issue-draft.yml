@@ -22,27 +22,15 @@ jobs:
           ISSUE_TITLE="${{ github.event.issue.title }}"
           ISSUE_BODY="${{ github.event.issue.body }}"
           ISSUE_NUM="${{ github.event.issue.number }}"
-
-          RESPONSE=$(curl -s \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"contents\":[{\"parts\":[{\"text\":\"다음 이슈를 보고 React 컴포넌트 코드만 작성해줘. 설명 없이 코드만. 이슈 제목: $ISSUE_TITLE, 내용: $ISSUE_BODY\"}]}]}")
-
+          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" -H "Content-Type: application/json" -d "{\"contents\":[{\"parts\":[{\"text\":\"React 컴포넌트 코드만 작성해줘. 설명없이 코드만. 이슈: $ISSUE_TITLE\"}]}]}")
           CODE=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['candidates'][0]['content']['parts'][0]['text'])")
-
           mkdir -p src/components
-          FILENAME=$(echo "$ISSUE_TITLE" | sed 's/ /-/g' | sed 's/[^a-zA-Z0-9가-힣-]//g')
+          FILENAME=$(echo "$ISSUE_TITLE" | sed 's/ /-/g')
           echo "$CODE" > "src/components/${FILENAME}.jsx"
-
           git config user.name "gemini-bot"
           git config user.email "gemini-bot@auto.dev"
-          BRANCH="ai-draft/${ISSUE_NUM}"
-          git checkout -b "$BRANCH"
+          git checkout -b "ai-draft/${ISSUE_NUM}"
           git add .
           git commit -m "AI draft for issue #${ISSUE_NUM}"
-          git push origin "$BRANCH"
-          gh pr create \
-            --title "AI draft: $ISSUE_TITLE" \
-            --body "Closes #${ISSUE_NUM}" \
-            --base main \
-            --head "$BRANCH"
+          git push origin "ai-draft/${ISSUE_NUM}"
+          gh pr create --title "AI draft: $ISSUE_TITLE" --body "Closes #${ISSUE_NUM}" --base main --head "ai-draft/${ISSUE_NUM}"
