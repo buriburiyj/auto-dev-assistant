@@ -19,18 +19,68 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ISSUE_TITLE="${{ github.event.issue.title }}"
-          ISSUE_NUM="${{ github.event.issue.number }}"
-          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" -H "Content-Type: application/json" -d "{\"contents\":[{\"parts\":[{\"text\":\"React 컴포넌트 코드만 작성해줘. 설명없이 코드만. 이슈: $ISSUE_TITLE\"}]}]}")
-          echo "API Response: $RESPONSE"
-          CODE=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('candidates',[{}])[0].get('content',{}).get('parts',[{}])[0].get('text','// no code generated'))")
+          ISSUE_TITLE=$(jq -r '.issue.title' "$GITHUB_EVENT_PATH")
+          ISSUE_BODY=$(jq -r '.issue.body // empty' "$GITHUB_EVENT_PATH")
+          ISSUE_NUM=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
+
+          PROMPT="다음 GitHub 이슈를 보고 React 컴포넌트 코드를 작성해줘.
+          - 반드시 코드만 출력해. 마크다운 코드블록(\`\`\`) 없이 순수 JSX 코드만.
+          - export default 포함
+          - props 타입은 주석으로 명시
+          이슈 제목: ${ISSUE_TITLE}
+          이슈 내용: ${ISSUE_BODY}"
+
+          ESCAPED_PROMPT=$(echo "$PROMPT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+
+          RESPONSE=$(curl -s -f "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"contents\":[{\"parts\":[{\"text\":$ESCAPED_PROMPT}]}]}")
+
+          if [ $? -ne 0 ]; then
+            echo "API call failed"
+            exit 1
+          fi
+
+          CODE=$(echo "$RESPONSE" | python3 -c "
+          import sys, json, re
+          d = json.load(sys.stdin)
+          text = d.get('candidates',[{}])[0].get('content',{}).get('parts',[{}])[0].get('text','')
+          text = re.sub(r'\`\`\`[a-zA-Z]*\n?', '', text)
+          text = text.strip()
+          print(text)
+          ")
+
+          FILENAME=$(echo "$ISSUE_TITLE" | python3 -c "
+          import sys, re
+          title = sys.stdin.read().strip()
+          name = re.sub(r'[^a-zA-Z0-9 ]', '', title)
+          parts = name.split()
+          pascal = ''.join(w.capitalize() for w in parts if w)
+          print(pascal if pascal else 'Component')
+          ")
+
           mkdir -p src/components
-          FILENAME=$(echo "$ISSUE_TITLE" | sed 's/ /-/g')
           echo "$CODE" > "src/components/${FILENAME}.jsx"
+
           git config user.name "gemini-bot"
           git config user.email "gemini-bot@auto.dev"
-          git checkout -b "ai-draft/${ISSUE_NUM}"
+          BRANCH="ai-draft/${ISSUE_NUM}"
+          git checkout -b "$BRANCH"
           git add .
-          git commit -m "AI draft for issue #${ISSUE_NUM}"
-          git push origin "ai-draft/${ISSUE_NUM}"
-          gh pr create --title "AI draft: $ISSUE_TITLE" --body "Closes #${ISSUE_NUM}" --base main --head "ai-draft/${ISSUE_NUM}"
+          git commit -m "feat: AI draft for #${ISSUE_NUM} - ${ISSUE_TITLE}"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "feat: ${ISSUE_TITLE}" \
+            --body "## AI 자동 생성 PR
+
+Closes #${ISSUE_NUM}
+
+### 변경사항
+- \`src/components/${FILENAME}.jsx\` 컴포넌트 추가
+
+> 이 PR은 Gemini AI가 자동으로 생성했습니다. 리뷰 후 머지해주세요." \
+            --base main \
+            --head "$BRANCH"
+
+          gh issue comment "$ISSUE_NUM" --body "AI가 코드 초안을 작성했습니다! PR을 확인해주세요."

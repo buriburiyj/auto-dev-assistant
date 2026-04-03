@@ -21,14 +21,43 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           FILES=$(find src/components -name "*.jsx" -o -name "*.tsx" 2>/dev/null | head -10)
-          if [ -z "$FILES" ]; then echo "No components" && exit 0; fi
+          if [ -z "$FILES" ]; then
+            echo "No component files found, skipping audit"
+            exit 0
+          fi
+
           CODE=""
-          for f in $FILES; do CODE="$CODE\n--- $f ---\n$(cat $f)"; done
-          ESCAPED=$(echo -e "$CODE" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
-          PAYLOAD="{\"contents\":[{\"parts\":[{\"text\":\"다음 React 코드의 성능과 접근성 감사를 해줘. 이모지 써서 보기좋게 리포트 작성. 한국어로:\n\"$ESCAPED\"}]}]}"
-          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" -H "Content-Type: application/json" -d "$PAYLOAD")
+          for f in $FILES; do
+            CONTENT=$(cat "$f")
+            CODE="${CODE}
+--- ${f} ---
+${CONTENT}
+"
+          done
+
+          PROMPT="다음 React 컴포넌트들을 분석해서 성능/접근성 감사 리포트를 작성해줘.
+          형식 (한국어, 이모지 사용):
+          ## 감사 결과 요약
+          | 항목 | 상태 | 설명 |
+          ### 성능 이슈
+          ### 접근성 이슈
+          ### 개선 권장사항 (우선순위별)
+
+          코드:
+          $CODE"
+
+          ESCAPED_PROMPT=$(echo "$PROMPT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+
+          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"contents\":[{\"parts\":[{\"text\":$ESCAPED_PROMPT}]}]}")
+
           AUDIT=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('candidates',[{}])[0].get('content',{}).get('parts',[{}])[0].get('text','감사 실패'))")
+
           PR_NUM="${{ github.event.pull_request.number }}"
           gh pr comment "$PR_NUM" --body "## 🔍 AI 성능/접근성 감사 리포트
 
-$AUDIT"
+$AUDIT
+
+---
+> *Powered by Gemini AI*"
