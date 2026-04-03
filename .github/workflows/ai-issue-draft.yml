@@ -20,13 +20,12 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_EVENT_PATH: ${{ github.event_path }}
         run: |
           ISSUE_TITLE=$(jq -r '.issue.title' "$GITHUB_EVENT_PATH")
           ISSUE_BODY=$(jq -r '.issue.body // empty' "$GITHUB_EVENT_PATH")
           ISSUE_NUM=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
           export ISSUE_TITLE ISSUE_BODY ISSUE_NUM
-          python3 /dev/stdin << 'PYSCRIPT'
+          python3 << 'PYSCRIPT'
           import subprocess, json, os, re
 
           api_key = os.environ["GEMINI_API_KEY"]
@@ -92,13 +91,14 @@ jobs:
           git commit -m "feat: AI draft for #${ISSUE_NUM} - ${ISSUE_TITLE}"
           git push origin "$BRANCH"
 
-          gh pr create --title "feat: ${ISSUE_TITLE}" --body "Closes #${ISSUE_NUM}
+          PR_BODY="Closes #${ISSUE_NUM}
 
-## 🤖 AI 코드 리뷰
-${REVIEW}
+          ## 🤖 AI 코드 리뷰
+          ${REVIEW}
 
----
-## 🔍 AI 성능/접근성 감사
-${AUDIT}" --base main --head "$BRANCH"
+          ---
+          ## 🔍 AI 성능/접근성 감사
+          ${AUDIT}"
 
+          gh pr create --title "feat: ${ISSUE_TITLE}" --body "$PR_BODY" --base main --head "$BRANCH"
           gh issue comment "$ISSUE_NUM" --body "AI가 코드 생성 + 리뷰 + 감사 완료! PR을 확인해주세요."
